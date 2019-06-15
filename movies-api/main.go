@@ -1,73 +1,35 @@
 package main
 
 import (
-	"encoding/json"
-	"log"
-	"fmt"
-	"net/http"
-	
+	"os"
+
+	"github.com/drgomesp/frames/movies-api/handler"
+	"github.com/drgomesp/frames/movies-api/tmdb"
 	"github.com/labstack/echo"
+	log "github.com/sirupsen/logrus"
 )
+
+func init() {
+	log.SetFormatter(&log.TextFormatter{})
+	log.SetOutput(os.Stdout)
+	log.SetLevel(log.InfoLevel)
+}
 
 func main() {
 	e := echo.New()
 
-	e.GET("/", func(c echo.Context) error {
-		fetchUpcomingMovies()
-		return c.String(http.StatusOK, "Hello, World!")
-	})
-
-	e.Logger.Fatal(e.Start(":1323"))
-}
-
-type UpcomingMoviesResponse struct {
-	Results []MovieListResult `json:"results"`
-	TotalPages int `json:"total_pages"`
-	TotalResults int `json:"total_results"`
-}
-
-type MovieListResult struct {
-	PosterPath string `json:"poster_path"`
-	Adult bool `json:"adult"`
-	Overview string `json:"overview"`
-	ReleaseDate string `json:"release_date"`
-	GenreIDs []int `json:"genre_ids"`
-	ID int `json:"id"`
-	OriginalTitle string `json:"original_title"`
-	OriginalLanguage string `json:"original_language"`
-	Title string `json:"title"`
-	BackdropPath string `json:"backdrop_path"`
-	Popularity float32 `json:"popularity"`
-	VoteCount int `json:"vote_count"`
-	Video bool `json:"video"`
-	VoteAverage float32 `json:"vote_average"`
-}
-
-func fetchUpcomingMovies() {
-	url := fmt.Sprintf("https://api.themoviedb.org/3/movie/upcoming?api_key=1f54bd990f1cdfb230adb312546d765d&language=en-US&page=1")
-
-	req, err := http.NewRequest("GET", url, nil)
+	client, err := tmdb.NewClient(os.Getenv("TMDB_API_KEY"))
 	if err != nil {
-		log.Fatal("NewRequest: ", err)
-		return
+		log.Error(err)
 	}
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	go client.WarmupUpcoming()
+	moviesHandler, err := handler.NewMoviesHandler(client)
 	if err != nil {
-		log.Fatal("Do: ", err)
-		return
+		log.Error(err)
 	}
 
-	defer resp.Body.Close()
+	e.GET("/", moviesHandler.UpcomingHandler)
 
-	var r UpcomingMoviesResponse
-
-	// Use json.Decode for reading streams of JSON data
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		log.Println(err)
-	}
-
-	log.Println(r.TotalPages)
-	log.Println(r.TotalResults)
+	log.Fatal(e.Start(":1323"))
 }
