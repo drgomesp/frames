@@ -12,20 +12,20 @@ type RedisCache struct {
 }
 
 func NewRedisCache() *RedisCache {
-	return &RedisCache {
+	return &RedisCache{
 		client: redis.NewClient(&redis.Options{
-			Addr:     "localhost:6379",
+			Addr: "localhost:6379",
 		}),
 	}
 }
 
 func (c *RedisCache) Get(key string) string {
-	v, err := c.client.Get(key).Result(); 
-	
+	v, err := c.client.Get(key).Result()
+
 	if err != nil {
-		panic(err)
+		return ""
 	}
-	
+
 	return v
 }
 

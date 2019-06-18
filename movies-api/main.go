@@ -5,14 +5,27 @@ import (
 
 	"github.com/drgomesp/frames/movies-api/handler"
 	"github.com/drgomesp/frames/movies-api/tmdb"
+	"github.com/joho/godotenv"
 	"github.com/labstack/echo"
 	log "github.com/sirupsen/logrus"
 )
 
 func init() {
+	err := godotenv.Load()
+	if err != nil {
+		panic("could not load .env file")
+	}
+
 	log.SetFormatter(&log.TextFormatter{})
 	log.SetOutput(os.Stdout)
-	log.SetLevel(log.InfoLevel)
+
+	logLevel, err := log.ParseLevel(os.Getenv("LOG_LEVEL"))
+
+	if err != nil {
+		panic(err)
+	}
+
+	log.SetLevel(logLevel)
 }
 
 func main() {
@@ -23,6 +36,7 @@ func main() {
 		log.Error(err)
 	}
 
+	client.WarmupGenres()
 	go client.WarmupUpcoming()
 	moviesHandler, err := handler.NewMoviesHandler(client)
 	if err != nil {

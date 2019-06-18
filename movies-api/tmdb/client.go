@@ -3,7 +3,6 @@ package tmdb
 import (
 	"encoding/json"
 	"fmt"
-
 	"net/http"
 	"strconv"
 	"strings"
@@ -28,26 +27,21 @@ type UpcomingPage struct {
 }
 
 type MovieListItem struct {
-	PosterPath       string  `json:"poster_path"`
-	Adult            bool    `json:"adult"`
-	Overview         string  `json:"overview"`
-	ReleaseDate      string  `json:"release_date"`
-	GenreIDs         []int   `json:"genre_ids"`
-	ID               int     `json:"id"`
-	OriginalTitle    string  `json:"original_title"`
-	OriginalLanguage string  `json:"original_language"`
-	Title            string  `json:"title"`
-	BackdropPath     string  `json:"backdrop_path"`
-	Popularity       float32 `json:"popularity"`
-	VoteCount        int     `json:"vote_count"`
-	Video            bool    `json:"video"`
-	VoteAverage      float32 `json:"vote_average"`
+	PosterPath   string  `json:"poster_path"`
+	ReleaseDate  string  `json:"release_date"`
+	GenreIDs     []int   `json:"genre_ids"`
+	Title        string  `json:"title"`
+	BackdropPath string  `json:"backdrop_path"`
+	Genres       []Genre `json:"genres"`
 }
 
-// TODO: create a warm-up function to load all records from upcoming endpoint and put them into a cache store
-// TODO: read from cache, otherwise call warm-up and then read from cache again
+type Genre struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
 
 type Client struct {
+	apiKey string
 	cache  store.Cache
 	client *http.Client
 
@@ -56,18 +50,59 @@ type Client struct {
 
 func NewClient(apiKey string) (*Client, error) {
 	return &Client{
+		apiKey: apiKey,
 		cache:  store.NewRedisCache(),
 		client: &http.Client{},
 	}, nil
+}
+
+type GenresResponse struct {
+	Genres []Genre `json:"genres"`
+}
+
+func (c *Client) WarmupGenres() error {
+	log.Info("Warming-up genres...")
+
+	var (
+		err            error
+		url            strings.Builder
+		req            *http.Request
+		resp           *http.Response
+		genresResponse GenresResponse
+	)
+
+	url.WriteString(fmt.Sprintf("%s/genre/movie/list?api_key=%s&language=en-US", TMBdURI, c.apiKey))
+
+	if req, err = http.NewRequest("GET", url.String(), nil); err != nil {
+		return err
+	}
+
+	if resp, err = c.client.Do(req); err != nil {
+		return err
+	}
+
+	defer resp.Body.Close()
+
+	// Use json.Decode for reading streams of JSON data
+	if err := json.NewDecoder(resp.Body).Decode(&genresResponse); err != nil {
+		return err
+	}
+
+	for _, g := range genresResponse.Genres {
+		key := fmt.Sprintf("genres/%d", g.ID)
+		log.Debugf("cache.Set(%v)", key)
+		c.cache.Set(key, g.Name)
+	}
+
+	return nil
 }
 
 func (c *Client) WarmupUpcoming() error {
 	log.Info("Warming-up upcoming movies...")
 
 	var (
-		err          error
-		currentPage  *UpcomingPage
-		pagesToFetch int
+		err         error
+		currentPage *UpcomingPage
 	)
 
 	if currentPage, err = c.fetchUpcomingPage(1); err == nil {
@@ -79,17 +114,17 @@ func (c *Client) WarmupUpcoming() error {
 	}
 
 	c.upcomingPages = currentPage.TotalPages
-	pagesToFetch = currentPage.TotalPages - 1
 
-	for pagesToFetch > 1 {
-		page, err := c.fetchUpcomingPage(pagesToFetch)
+	count := 1
+	for count <= c.upcomingPages {
+		page, err := c.fetchUpcomingPage(count)
 
 		if err != nil {
 			return err
 		}
 
-		go c.storeUpcomingPage(pagesToFetch, page)
-		pagesToFetch--
+		go c.storeUpcomingPage(count, page)
+		count++
 	}
 
 	return nil
@@ -125,9 +160,7 @@ func (c *Client) fetchUpcomingPage(pageNumber int) (*UpcomingPage, error) {
 		page UpcomingPage
 	)
 
-	url.WriteString(TMBdURI)
-	url.WriteString("/movie/upcoming?api_key=1f54bd990f1cdfb230adb312546d765d&language=en-US&page=")
-	url.WriteString(strconv.Itoa(pageNumber))
+	url.WriteString(fmt.Sprintf("%s/movie/upcoming?api_key=%s&language=en-US&page=%s", TMBdURI, c.apiKey, strconv.Itoa(pageNumber)))
 
 	if req, err = http.NewRequest("GET", url.String(), nil); err != nil {
 		return nil, err
@@ -148,7 +181,24 @@ func (c *Client) fetchUpcomingPage(pageNumber int) (*UpcomingPage, error) {
 }
 
 func (c *Client) storeUpcomingPage(pageNumber int, page *UpcomingPage) error {
-	r, err := json.Marshal(page.Results)
+	var results []MovieListItem
+
+	for _, r := range page.Results {
+		for _, genreID := range r.GenreIDs {
+			name := c.cache.Get(fmt.Sprintf("genres/%d", genreID))
+			log.Debugf("cache.Get(%v)", genreID)
+
+			r.Genres = append(r.Genres, Genre{
+				genreID,
+				name,
+			})
+		}
+
+		results = append(results, r)
+	}
+
+	r, err := json.Marshal(results)
+	log.Debug(string(r))
 
 	if err != nil {
 		return err
